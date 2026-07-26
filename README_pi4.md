@@ -199,8 +199,15 @@ RasPiCam/
 │   ├── logging_setup.py     # rotating logs (USB + RAM fallback)
 │   └── util.py              # durable/atomic filesystem primitives
 ├── tools/
-│   └── correct_aspect.py    # offline anamorphic aspect-ratio correction
-├── systemd/stereorec.service
+│   ├── correct_aspect.py       # offline anamorphic aspect-ratio correction
+│   ├── check_for_update.py     # git fetch/pull + restart, see Auto-updating over Ethernet
+│   └── update_button_watcher.py  # optional GPIO button -> on-demand update check
+├── systemd/
+│   ├── stereorec.service
+│   ├── stereorec-update.service   # one-shot: runs check_for_update.py
+│   ├── stereorec-update.timer     # triggers the above every few minutes
+│   └── stereorec-update-button.service  # optional: runs update_button_watcher.py
+├── .gitignore
 ├── config.example.json
 ├── requirements.txt
 └── README.md
@@ -340,14 +347,14 @@ Ctrl-C/`SIGTERM` (the graceful shutdown blanks the strip while the Pi still has 
 ## Installation (Raspberry Pi 4, Raspberry Pi OS Bookworm or Trixie)
 
 ```bash
-# 1) System packages (Picamera2 + ffmpeg come from apt, not pip).
+# 1) System packages (Picamera2, ffmpeg, gpiozero come from apt, not pip; git to clone).
 sudo apt update
-sudo apt install -y python3-picamera2 ffmpeg python3-venv bluez
+sudo apt install -y python3-picamera2 ffmpeg python3-venv python3-gpiozero bluez git
 
-# 2) Deploy the code.
-sudo mkdir -p /opt/stereorec
-sudo cp -r stereorec tools config.example.json /opt/stereorec/
-sudo cp config.example.json /opt/stereorec/config.json   # optional, then edit
+# 2) Deploy the code -- a git clone, not a plain copy, so it can be updated later with
+#    `git pull` (see Auto-updating over Ethernet below). Use your own repo's URL.
+sudo git clone https://github.com/<user>/<repo>.git /opt/stereorec
+sudo cp /opt/stereorec/config.example.json /opt/stereorec/config.json   # then edit
 
 # 3) Virtualenv that can still see the apt-installed picamera2/libcamera.
 #    Also installs the NeoPixel LED packages (adafruit-blinka, neopixel, rpi_ws281x) --
@@ -375,6 +382,14 @@ journalctl -u stereorec -f
 
 # 6) Set up the power button (recommended for an unattended/enclosed deployment) --
 #    see "GPIO shutdown button" under Safe shutdown & power-down below.
+
+# 7) (Development devices only -- see Auto-updating over Ethernet below) enable
+#    periodic update checks, and optionally the on-demand GPIO button watcher:
+sudo cp systemd/stereorec-update.service systemd/stereorec-update.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now stereorec-update.timer
+sudo cp systemd/stereorec-update-button.service /etc/systemd/system/   # optional
+sudo systemctl enable --now stereorec-update-button.service            # optional
 ```
 
 ### Run on boot (final deployment)
@@ -508,6 +523,61 @@ sudo rfkill block bluetooth
 > `stereorec/` uses it — harmless to leave installed alongside `disable-bt` (the package
 > just has nothing to talk to), but it can be dropped from that `apt install` line too if
 > Bluetooth is permanently off.
+
+### Auto-updating over Ethernet
+> **Assumption this leans on: Ethernet is only ever connected to this device during
+> development, never during an unattended field recording.** That's what makes it safe to
+> treat "a newer commit exists" as "safe to stop recording, update, and restart" without any
+> live in-process pause/resume or way to defer an update mid-recording. If a deployment ever
+> needs ethernet plugged in during real field recording, disable this first (see below) — the
+> WiFi/Bluetooth radios being off doesn't help here, since this uses the wired interface.
+
+`/opt/stereorec` is a git working tree (see Installation, step 2), so it can pick up new
+commits pushed to its GitHub remote. `systemd/stereorec-update.timer` runs
+`tools/check_for_update.py` every 5 minutes (`OnUnitActiveSec=5min`; negligible cost when
+offline since the check just times out fast):
+
+1. `git fetch` (15s timeout) — no network/unreachable just means "nothing to do."
+2. Compare local `HEAD` to the upstream ref — equal means already up to date.
+3. Otherwise: light pixel 0 with `led_update_color` (cyan by default — see
+   [Status LEDs](#configuration)), `systemctl stop stereorec` (graceful — finalizes any
+   in-progress recording exactly like a manual stop), `git pull --ff-only`,
+   `pip install -r requirements.txt`, then a `python -m py_compile` sanity check.
+   * **Success:** blank the LED and `systemctl start stereorec` — recording resumes
+     automatically via `auto_start` in a new session, and the main app's own startup sequence
+     immediately takes the strip back over.
+   * **Failure:** log the error, `git reset --hard` back to the pre-update commit, blank the
+     LED, and restart on the known-good code anyway (auto-rollback, not a stuck/stopped
+     device) — the bad commit is left for you to fix in the repo.
+
+The updater's own logs never touch the SD card either: it writes to
+`<fallback_log_dir>/stereorec-update.log` (RAM/tmpfs) and copies that file onto
+`<mount>/STEREOREC/update_logs/stereorec-update.log` at the end of every run if the USB
+drive is currently mounted — same wear-reduction goal as
+[Reducing SD-card wear](#reducing-sd-card-wear).
+
+**On-demand check.** Instead of waiting up to 5 minutes:
+```bash
+sudo systemctl start stereorec-update.service    # runs one check immediately
+```
+or wire an optional momentary button between **GPIO17 (physical pin 11)** and **GND**, and
+enable `stereorec-update-button.service` (Installation step 7) — pressing it runs the same
+on-demand check via `tools/update_button_watcher.py`. GPIO17 is free on this build (GPIO3 is
+the shutdown button, GPIO18 is the LED data line); override the pin with
+`STEREOREC_UPDATE_BUTTON_PIN` if it's needed for something else.
+
+**Checking status:**
+```bash
+systemctl list-timers stereorec-update.timer   # last/next run
+journalctl -u stereorec-update -e              # last check's log
+git -C /opt/stereorec log -1 --oneline         # commit currently deployed
+```
+
+**Disabling for a field deployment** (in addition to simply not connecting ethernet):
+```bash
+sudo systemctl disable --now stereorec-update.timer
+sudo systemctl disable --now stereorec-update-button.service   # if the button was enabled
+```
 
 ### Camera setup (Arducam Camarray / stereo HAT)
 This build assumes the HAT enumerates as a **single** camera producing one **combined
@@ -851,6 +921,7 @@ overrides in this order (later wins):
 | `led_pixel_order` | `"GRB"` | Matches the wiring test's `led_test.py`. |
 | `led_state_colors` | see `config.py` | `{state_name: (r,g,b)}` — defaults: `BOOTING` blue, `IDLE` green, `RECORDING` red, `RECOVERING` yellow, `ERROR` magenta, `SHUTDOWN` off. |
 | `led_thermal_colors` | see `config.py` | `{"normal"/"warning"/"danger": (r,g,b)}` — defaults: off / amber / red. |
+| `led_update_color` | `(0,60,60)` cyan | Pixel 0 color shown by `tools/check_for_update.py` while an update is in progress — see [Auto-updating over Ethernet](#auto-updating-over-ethernet). |
 
 **Loop / logging / misc**
 | Field | Default | Purpose |
@@ -946,6 +1017,21 @@ python3 -m py_compile stereorec/*.py tools/*.py
   file once back below `temp_danger_c - temp_recovery_hysteresis_c`.
 * Real thermal stress (e.g. `stress-ng --cpu 4`) exercises the same path end-to-end if you'd
   rather not touch the thresholds.
+
+### 6. Auto-update (dev machines with ethernet only)
+* **Happy path:** push a trivial commit (e.g. a comment change) to the GitHub remote, then
+  `sudo systemctl start stereorec-update.service` for an immediate check (or wait for the
+  timer). Expect: pixel 0 turns the `led_update_color` cyan, `journalctl -u stereorec-update
+  -f` shows fetch → stop → pull → pip install → py_compile → start, `stereorec` restarts into
+  a new session, and `git -C /opt/stereorec log -1` shows the new commit.
+* **Rollback:** push a commit with a deliberate syntax error, trigger a check the same way.
+  Expect: the py_compile step fails, the log shows a rollback to the previous commit, and
+  `stereorec` restarts successfully anyway (`git -C /opt/stereorec log -1` shows the *old*
+  commit — confirms the rollback, not just a restart on broken code).
+* **Button (if wired):** press the GPIO17 button and confirm the same check runs immediately
+  (`journalctl -u stereorec-update -f`), and that a second press while one is already running
+  doesn't start an overlapping run (`systemctl status stereorec-update.service` shows only one
+  active invocation).
 
 ### Verifying the recording
 ```bash
@@ -1081,3 +1167,9 @@ footage. Worth deciding explicitly rather than adopting by default.
 * **Thermal safe-stop is footage-preserving but not seamless.** A sustained danger-zone
   temperature ends the current file and waits for the CPU to cool before resuming into a new
   one — by design, since the alternative is risking the encode during a thermal-throttle event.
+* **Auto-update stops and restarts recording.** If `stereorec-update.timer` is enabled and the
+  device is on a network with a newer commit available, it *will* stop the current recording
+  (safely, finalizing the file), update, and restart — see
+  [Auto-updating over Ethernet](#auto-updating-over-ethernet). This is only safe under this
+  build's explicit assumption that ethernet is connected during development, not during an
+  unattended field recording; disable the timer before any deployment where that might not hold.

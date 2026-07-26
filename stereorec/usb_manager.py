@@ -19,6 +19,54 @@ logger = logging.getLogger(__name__)
 _PROBE_FILENAME = ".stereorec_write_probe"
 
 
+def resolve_mount(config: Config) -> Optional[str]:
+    """One-shot resolution of the labelled USB drive's mount path, or None.
+
+    Standalone so short-lived scripts (e.g. tools/check_for_update.py) can look
+    up the mount without spinning up a whole UsbManager/poller thread.
+    """
+    return _resolve_by_label(config) or _scan_mount_roots(config)
+
+
+def _resolve_by_label(config: Config) -> Optional[str]:
+    link = os.path.join("/dev/disk/by-label", config.usb_label)
+    try:
+        device = os.path.realpath(link)
+    except OSError:
+        return None
+    if not os.path.exists(device):
+        return None
+    try:
+        with open("/proc/mounts", "r", encoding="utf-8") as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) >= 2:
+                    try:
+                        if os.path.realpath(parts[0]) == device:
+                            return parts[1]
+                    except OSError:
+                        continue
+    except OSError:
+        return None
+    return None
+
+
+def _scan_mount_roots(config: Config) -> Optional[str]:
+    label = config.usb_label
+    for root in config.mount_roots:
+        direct = os.path.join(root, label)
+        if os.path.isdir(direct):
+            return direct
+        try:
+            for entry in os.listdir(root):
+                candidate = os.path.join(root, entry, label)
+                if os.path.isdir(candidate):
+                    return candidate
+        except OSError:
+            continue
+    return None
+
+
 class UsbManager:
     def __init__(
         self,
@@ -71,44 +119,7 @@ class UsbManager:
             self.mount_path = candidate
 
     def _resolve_mount(self) -> Optional[str]:
-        return self._resolve_by_label() or self._scan_mount_roots()
-
-    def _resolve_by_label(self) -> Optional[str]:
-        link = os.path.join("/dev/disk/by-label", self.config.usb_label)
-        try:
-            device = os.path.realpath(link)
-        except OSError:
-            return None
-        if not os.path.exists(device):
-            return None
-        try:
-            with open("/proc/mounts", "r", encoding="utf-8") as fh:
-                for line in fh:
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        try:
-                            if os.path.realpath(parts[0]) == device:
-                                return parts[1]
-                        except OSError:
-                            continue
-        except OSError:
-            return None
-        return None
-
-    def _scan_mount_roots(self) -> Optional[str]:
-        label = self.config.usb_label
-        for root in self.config.mount_roots:
-            direct = os.path.join(root, label)
-            if os.path.isdir(direct):
-                return direct
-            try:
-                for entry in os.listdir(root):
-                    candidate = os.path.join(root, entry, label)
-                    if os.path.isdir(candidate):
-                        return candidate
-            except OSError:
-                continue
-        return None
+        return resolve_mount(self.config)
 
     def _write_probe(self, path: str) -> bool:
         probe_path = os.path.join(path, _PROBE_FILENAME)

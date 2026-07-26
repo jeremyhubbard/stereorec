@@ -1,6 +1,8 @@
-# Picamera2 and ffmpeg are installed via apt (python3-picamera2, ffmpeg), never
-# pip -- they ship compiled bindings matched to the system libcamera. This
-# venv is created with --system-site-packages so it can still import them.
+# Picamera2, ffmpeg, and gpiozero are installed via apt (python3-picamera2,
+# ffmpeg, python3-gpiozero), never pip -- they ship compiled bindings/system
+# integration matched to the OS. This venv is created with
+# --system-site-packages so it can still import them. gpiozero is only used by
+# the optional tools/update_button_watcher.py GPIO update-check button.
 #
 # The only pip packages the recorder itself needs are for the optional NeoPixel
 # status LEDs (led_enabled: true in config.json):

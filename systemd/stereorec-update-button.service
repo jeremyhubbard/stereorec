@@ -1,0 +1,13 @@
+[Unit]
+Description=StereoRec update-check button watcher
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/opt/stereorec/venv/bin/python /opt/stereorec/tools/update_button_watcher.py
+# Environment=STEREOREC_UPDATE_BUTTON_PIN=17    # uncomment to use a pin other than GPIO17
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -75,6 +75,7 @@ class Config:
             "danger": (60, 0, 0),
         }
     )
+    led_update_color: Tuple[int, int, int] = (0, 60, 60)
 
     # Loop / logging / misc
     main_loop_interval_s: float = 0.5

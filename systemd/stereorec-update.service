@@ -1,0 +1,11 @@
+[Unit]
+Description=StereoRec update checker (one-shot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/stereorec/venv/bin/python /opt/stereorec/tools/check_for_update.py
+Environment=STEREOREC_CONFIG=/opt/stereorec/config.json
+StandardOutput=journal
+StandardError=journal

@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically check for StereoRec updates
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

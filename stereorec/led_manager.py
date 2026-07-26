@@ -74,6 +74,16 @@ class LedManager:
         color = self.config.led_thermal_colors.get(zone, (0, 0, 0))
         self._set_pixel(THERMAL_PIXEL_INDEX, color)
 
+    def set_updating(self) -> None:
+        """Show the update-in-progress color on the state pixel.
+
+        Used by tools/check_for_update.py while stereorec.service is stopped
+        for a stop -> pull -> restart cycle, so nothing else is driving pixel 0.
+        """
+        if self._strip is None:
+            return
+        self._set_pixel(STATE_PIXEL_INDEX, self.config.led_update_color)
+
     def _set_pixel(self, index: int, color) -> None:
         try:
             self._strip[index] = tuple(color)
