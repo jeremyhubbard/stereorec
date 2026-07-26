@@ -352,8 +352,8 @@ sudo apt update
 sudo apt install -y python3-picamera2 ffmpeg python3-venv python3-gpiozero bluez git
 
 # 2) Deploy the code -- a git clone, not a plain copy, so it can be updated later with
-#    `git pull` (see Auto-updating over Ethernet below). Use your own repo's URL.
-sudo git clone https://github.com/<user>/<repo>.git /opt/stereorec
+#    `git pull` (see Auto-updating over Ethernet below).
+sudo git clone https://github.com/jeremyhubbard/stereorec.git /opt/stereorec
 sudo cp /opt/stereorec/config.example.json /opt/stereorec/config.json   # then edit
 
 # 3) Virtualenv that can still see the apt-installed picamera2/libcamera.
