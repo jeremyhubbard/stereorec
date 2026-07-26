@@ -1,0 +1,28 @@
+[Unit]
+Description=StereoRec stereo video recorder
+After=local-fs.target
+Wants=local-fs.target
+
+[Service]
+Type=notify
+# No User= directive -- runs as root, which is required for the NeoPixel
+# rpi_ws281x PWM/DMA backend (when led_enabled: true) as well as camera/GPIO
+# access.
+ExecStart=/opt/stereorec/venv/bin/python -m stereorec
+WorkingDirectory=/opt/stereorec
+Environment=STEREOREC_CONFIG=/opt/stereorec/config.json
+Restart=always
+RestartSec=2
+WatchdogSec=30
+KillSignal=SIGTERM
+TimeoutStopSec=90
+StandardOutput=journal
+StandardError=journal
+
+# tmpfs, service-owned and auto-cleaned, backing the RAM fallback_log_dir
+# default (/run/stereorec) so steady-state logging never touches the SD card.
+RuntimeDirectory=stereorec
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

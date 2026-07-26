@@ -1,0 +1,18 @@
+{
+  "frame_width": 2028,
+  "frame_height": 1520,
+  "sensor_mode_index": null,
+  "framerate": 30,
+  "bitrate": 12000000,
+  "video_container": "ts",
+
+  "usb_label": "STEREOREC",
+  "min_free_mb": 1024,
+
+  "led_enabled": true,
+  "led_gpio_pin": 18,
+  "led_count": 2,
+
+  "temp_warning_c": 70.0,
+  "temp_danger_c": 80.0
+}

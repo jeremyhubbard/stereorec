@@ -1,0 +1,46 @@
+1. Run the app for a fixed window with a test config
+Make a test-config.json with your target settings and short segments (so you get several and can spot boundary issues):
+
+
+{ "frame_width": 1920, "frame_height": 1080, "framerate": 50,
+  "bitrate": 12000000, "segment_seconds": 10, "auto_start": true }
+Then (USB inserted), run it for ~60 s — timeout sends SIGTERM, which triggers the graceful finalize:
+
+
+cd /opt/stereorec       # dir containing the stereorec/ package
+STEREOREC_CONFIG=./test-config.json timeout 60 /opt/stereorec/venv/bin/python -m stereorec
+# (Ctrl-C also stops it gracefully)
+2. Watch the pipeline live (second terminal)
+
+vcgencmd measure_clock h264     # HW encoder engaged
+htop                            # a pegged core = SW encode OR the ISP downscale is the bottleneck
+journalctl -u stereorec -f      # or watch stderr: look for CAMERA_STALL / "Failed to publish"
+3. The verdict: frames actually written vs. expected
+This is the real throughput measure — count frames across the produced segments and compare to framerate × seconds:
+
+
+SES=/media/pi/STEREOREC/<session_id>
+# total encoded frames across all segments:
+for f in "$SES"/segment_*.ts; do
+  ffprobe -v error -count_frames -select_streams v:0 \
+    -show_entries stream=nb_read_frames -of csv=p=0 "$f"
+done | paste -sd+ | bc
+# per-segment duration (should be ~segment_seconds):
+ffprobe -v error -show_entries format=duration -of csv=p=0 "$SES"/segment_000001.ts
+≈ 50 × total_seconds → the app sustained throughput. Materially fewer → frames were dropped somewhere in the chain.
+
+4. Isolate USB write from encode (very useful)
+To find out whether the USB write is the limiter vs. the encode/ISP, point the app at a RAM disk so storage is effectively infinite-speed, and repeat:
+
+
+{ "mount_roots": ["/dev/shm"], "usb_label": "STEREOREC",
+  "frame_width": 1920, "frame_height": 1080, "framerate": 50,
+  "bitrate": 12000000, "segment_seconds": 10 }
+
+mkdir -p /dev/shm/STEREOREC      # the app treats any writable <root>/STEREOREC as the drive
+STEREOREC_CONFIG=./ramtest-config.json timeout 60 /opt/stereorec/venv/bin/python -m stereorec
+Drops disappear on RAM but appear on the USB → the USB write can't keep up at that bitrate (lower bitrate, or use a faster drive/exFAT/ext4).
+Drops persist on RAM → the bottleneck is encode/ISP, not storage (lower framerate, shrink the downscale ratio, or confirm HW encode).
+(Note: this exercises the actual segmenting pipeline — segment_*.ts + manifest.json — so if you want one file to inspect, run tools/merge_session.py on the session dir afterward.)
+
+Run the frames-vs-duration check both ways and the pair of numbers will point straight at the limiting stage — send them over and I'll help interpret and, if useful, add a "throughput test" recipe to the Pi 4 docs.

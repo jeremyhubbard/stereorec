@@ -1,0 +1,16 @@
+# Site-specific config -- deployed once, never overwritten by an update pull.
+config.json
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Logs (RAM/USB at runtime -- never belong in the repo)
+logs/
+*.log
+
+# OS cruft
+.DS_Store
+Thumbs.db

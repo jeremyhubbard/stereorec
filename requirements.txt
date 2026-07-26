@@ -1,0 +1,9 @@
+# Picamera2 and ffmpeg are installed via apt (python3-picamera2, ffmpeg), never
+# pip -- they ship compiled bindings matched to the system libcamera. This
+# venv is created with --system-site-packages so it can still import them.
+#
+# The only pip packages the recorder itself needs are for the optional NeoPixel
+# status LEDs (led_enabled: true in config.json):
+adafruit-blinka
+adafruit-circuitpython-neopixel
+rpi_ws281x
