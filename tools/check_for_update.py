@@ -166,6 +166,31 @@ def py_compile_check() -> bool:
     return result.returncode == 0
 
 
+def _load_json_keys(path: str):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        logger.debug("Could not read %s for config-key check: %s", path, exc)
+        return None
+    return set(data.keys()) if isinstance(data, dict) else None
+
+
+def check_new_config_keys() -> None:
+    """Warn (never modify) if config.example.json gained fields config.json lacks."""
+    example_keys = _load_json_keys(os.path.join(REPO_DIR, "config.example.json"))
+    live_keys = _load_json_keys(os.path.join(REPO_DIR, "config.json"))
+    if example_keys is None or live_keys is None:
+        return
+    new_keys = sorted(example_keys - live_keys)
+    if new_keys:
+        logger.warning(
+            "config.example.json has new field(s) not in your config.json: %s -- "
+            "review config.example.json and update config.json if you want them",
+            ", ".join(new_keys),
+        )
+
+
 def systemctl(action: str) -> bool:
     try:
         result = subprocess.run(
@@ -221,6 +246,7 @@ def main() -> int:
 
     if ok:
         logger.info("Update applied successfully: now at %s", remote[:8])
+        check_new_config_keys()
     else:
         logger.error("Update failed sanity checks -- rolling back to %s", previous_commit[:8])
         git_reset_hard(previous_commit)

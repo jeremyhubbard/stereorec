@@ -545,7 +545,11 @@ offline since the check just times out fast):
    `pip install -r requirements.txt`, then a `python -m py_compile` sanity check.
    * **Success:** blank the LED and `systemctl start stereorec` — recording resumes
      automatically via `auto_start` in a new session, and the main app's own startup sequence
-     immediately takes the strip back over.
+     immediately takes the strip back over. It also compares `config.example.json`'s keys
+     against your (gitignored, never-modified) `config.json` and logs a warning listing any
+     new fields the example has that yours doesn't — a pull can add new tunables, but it can
+     never see or touch your actual config, so this is the only way you'd otherwise find out
+     one exists.
    * **Failure:** log the error, `git reset --hard` back to the pre-update commit, blank the
      LED, and restart on the known-good code anyway (auto-rollback, not a stuck/stopped
      device) — the bad commit is left for you to fix in the repo.
