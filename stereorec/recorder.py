@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from typing import Callable, Optional
 
 from stereorec.camera_manager import CameraManager
@@ -125,23 +126,34 @@ class Recorder:
                 self._on_saved()
 
     def stop(self, state_manager: Optional[StateManager] = None) -> None:
+        stop_start = time.monotonic()
         self._monitor_stop.set()
         if self._monitor_thread is not None:
             self._monitor_thread.join(timeout=5)
             self._monitor_thread = None
+        join_elapsed = time.monotonic() - stop_start
+        if join_elapsed > 0.5:
+            logger.warning("Recorder monitor thread join took %.1fs", join_elapsed)
 
         if self._recording:
             picam2 = self.camera_manager.picam2
             if picam2 is not None:
                 try:
+                    finalize_start = time.monotonic()
                     picam2.stop_recording()
-                    logger.info("Recording finalized: %s", self._current_path)
+                    logger.info(
+                        "Recording finalized: %s (stop_recording took %.1fs)",
+                        self._current_path,
+                        time.monotonic() - finalize_start,
+                    )
                 except Exception:
                     logger.exception("Error stopping recording")
             self._recording = False
 
         if state_manager is not None:
             state_manager.set_recording_active(False)
+
+        logger.debug("Recorder.stop() total: %.1fs", time.monotonic() - stop_start)
 
     @property
     def is_recording(self) -> bool:

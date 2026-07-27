@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import os
 from typing import Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 _TRUE_STRINGS = {"1", "true", "yes", "on"}
 
@@ -103,14 +106,26 @@ class Config:
         try:
             with open(path, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
-        except (OSError, ValueError):
+        except OSError as exc:
+            logger.warning("Could not read config file %s: %s -- using defaults", path, exc)
+            return
+        except ValueError as exc:
+            logger.error(
+                "Config file %s is not valid JSON (%s) -- ignoring it entirely and using "
+                "defaults for every field, not just the invalid part",
+                path,
+                exc,
+            )
             return
         if not isinstance(data, dict):
+            logger.error("Config file %s must contain a JSON object -- using defaults", path)
             return
         valid_fields = {f.name for f in dataclasses.fields(self)}
         for key, value in data.items():
             if key in valid_fields:
                 setattr(self, key, value)
+            else:
+                logger.warning("Ignoring unknown config field %r in %s", key, path)
 
     def _apply_env_overrides(self) -> None:
         if "STEREOREC_USB_LABEL" in os.environ:

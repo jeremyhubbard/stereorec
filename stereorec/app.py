@@ -228,6 +228,7 @@ class RecorderApp:
 
     def _ensure_stopped(self) -> None:
         if self.recorder.is_recording:
+            self.camera_manager.prepare_to_stop()
             self.recorder.stop(self.state_manager)
         if self.camera_manager.picam2 is not None:
             self.camera_manager.close()

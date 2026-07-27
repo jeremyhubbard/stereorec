@@ -43,9 +43,20 @@ class CameraManager:
         self._stall_callback: Optional[Callable[[], None]] = None
         self._health_stop = threading.Event()
         self._health_thread: Optional[threading.Thread] = None
+        self._stopping = threading.Event()
 
     def set_stall_callback(self, callback: Callable[[], None]) -> None:
         self._stall_callback = callback
+
+    def prepare_to_stop(self) -> None:
+        """Suppress stall detection once an intentional stop has begun.
+
+        Frames genuinely stop arriving while stop_recording() finalizes the
+        output, which is expected -- without this, the frame-health monitor
+        logs a stream of misleading "camera stall" warnings for the whole
+        (potentially long) flush window.
+        """
+        self._stopping.set()
 
     def open(self) -> bool:
         if not PICAMERA2_AVAILABLE:
@@ -93,6 +104,7 @@ class CameraManager:
             self.picam2.pre_callback = self._pre_callback
             self._last_frame_time = time.monotonic()
             self._frame_count = 0
+            self._stopping.clear()
             self.picam2.start()
 
             self._health_stop.clear()
@@ -113,11 +125,12 @@ class CameraManager:
 
     def _health_loop(self) -> None:
         while not self._health_stop.is_set():
-            with self._frame_lock:
-                elapsed = time.monotonic() - self._last_frame_time
-            if elapsed > self.config.frame_stall_threshold_s and self._stall_callback:
-                logger.warning("No frame for %.1fs -- camera stall", elapsed)
-                self._stall_callback()
+            if not self._stopping.is_set():
+                with self._frame_lock:
+                    elapsed = time.monotonic() - self._last_frame_time
+                if elapsed > self.config.frame_stall_threshold_s and self._stall_callback:
+                    logger.warning("No frame for %.1fs -- camera stall", elapsed)
+                    self._stall_callback()
             self._health_stop.wait(self.config.frame_monitor_interval_s)
 
     def close(self) -> None:
@@ -126,8 +139,10 @@ class CameraManager:
             self._health_thread.join(timeout=5)
             self._health_thread = None
         if self.picam2 is not None:
+            close_start = time.monotonic()
             try:
                 self.picam2.close()
             except Exception:
                 logger.exception("Error closing camera")
+            logger.debug("picam2.close() took %.2fs", time.monotonic() - close_start)
             self.picam2 = None
