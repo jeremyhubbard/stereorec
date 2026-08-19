@@ -27,7 +27,13 @@ from stereorec.state_manager import StateManager, read_previous
 from stereorec.states import State, transition_allowed
 from stereorec.thermal_manager import ZONE_DANGER, ZONE_NORMAL, ThermalManager
 from stereorec.usb_manager import UsbManager
-from stereorec.util import ensure_dir, free_space_mb, read_cpu_temp_c, read_throttled_flags
+from stereorec.util import (
+    ensure_dir,
+    free_space_mb,
+    read_cpu_temp_c,
+    read_recent_kernel_log,
+    read_throttled_flags,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -132,13 +138,27 @@ class RecorderApp:
             logger.warning("Thermal danger zone reached -- safely stopping recording")
         elif stall:
             logger.warning("Camera stall detected -- recovering (%s)", self._diagnostics_snapshot())
+            self._log_kernel_log_tail()
         elif fault:
             logger.warning(
                 "Recording fault (%s) -- recovering (%s)", fault_reason, self._diagnostics_snapshot()
             )
+            self._log_kernel_log_tail()
 
         self._ensure_stopped()
         self._set_state(State.RECOVERING)
+
+    def _log_kernel_log_tail(self) -> None:
+        """Best-effort dmesg tail, logged alongside a stall/fault.
+
+        Catches USB/xhci or CSI/unicam driver messages that would otherwise
+        never surface in this app's own log -- the two most likely causes of
+        a frame-capture stall that temp/throttle/free-space can't rule in or
+        out on their own.
+        """
+        tail = read_recent_kernel_log()
+        if tail:
+            logger.warning("Recent kernel log (dmesg -T, newest last):\n%s", tail)
 
     def _diagnostics_snapshot(self) -> str:
         """Best-effort system snapshot to log alongside stall/fault events.

@@ -66,10 +66,10 @@ def read_cpu_temp_c() -> Optional[float]:
 def read_throttled_flags() -> Optional[str]:
     """Best-effort read of the RPi under-voltage/throttling bitmask via ``vcgencmd``.
 
-    Returns the raw ``throttled=0x...`` string (any nonzero bit means an
+    Returns just the hex bitmask, e.g. ``"0x50005"`` (any nonzero bit means an
     under-voltage, frequency-capping, or throttling event has occurred either
     now or since boot -- see the "Bit" table in vcgencmd's docs), or None if
-    vcgencmd isn't available (e.g. off-Pi, or not on PATH).
+    vcgencmd isn't available (e.g. off-Pi, not on PATH, or unexpected output).
     """
     try:
         result = subprocess.run(
@@ -82,4 +82,31 @@ def read_throttled_flags() -> Optional[str]:
         return None
     if result.returncode != 0:
         return None
-    return result.stdout.strip() or None
+    output = result.stdout.strip()
+    _, _, value = output.partition("=")
+    return value or None
+
+
+def read_recent_kernel_log(max_lines: int = 20) -> Optional[str]:
+    """Best-effort tail of the kernel ring buffer (``dmesg -T``), newest last.
+
+    Meant to be called right at stall/fault detection to catch USB/xhci or
+    CSI/unicam driver messages timed close to the event -- those don't show
+    up anywhere else in this app's own logging. Returns None off-Pi, without
+    permission, or if dmesg isn't on PATH.
+    """
+    try:
+        result = subprocess.run(
+            ["dmesg", "-T"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    lines = [line for line in result.stdout.splitlines() if line.strip()]
+    if not lines:
+        return None
+    return "\n".join(lines[-max_lines:])
