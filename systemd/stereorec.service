@@ -2,6 +2,12 @@
 Description=StereoRec stereo video recorder
 After=local-fs.target
 Wants=local-fs.target
+# Fires on any non-clean stop (watchdog timeout, OOM kill, uncaught fatal
+# exception, etc.) -- a graceful `systemctl stop`/SIGTERM shutdown exits 0 and
+# does NOT trigger this. Runs alongside Restart=always, not instead of it; see
+# stereorec-failure-report@.service and README_pi4.md's "Auto-updating over
+# Ethernet" section's neighbor, "Diagnosing watchdog/crash restarts".
+OnFailure=stereorec-failure-report@%n.service
 
 [Service]
 Type=notify

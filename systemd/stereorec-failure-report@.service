@@ -1,0 +1,9 @@
+[Unit]
+Description=Capture diagnostics after %i failed
+
+[Service]
+Type=oneshot
+ExecStart=/opt/stereorec/venv/bin/python /opt/stereorec/tools/log_failure_report.py %i
+Environment=STEREOREC_CONFIG=/opt/stereorec/config.json
+StandardOutput=journal
+StandardError=journal
