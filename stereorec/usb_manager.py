@@ -52,15 +52,22 @@ def _resolve_by_label(config: Config) -> Optional[str]:
 
 
 def _scan_mount_roots(config: Config) -> Optional[str]:
+    """Scan mount_roots for the labelled drive's mountpoint.
+
+    Requires an actual mount (os.path.ismount), not just a same-named directory --
+    otherwise a plain directory left on the SD card (e.g. a manually-created
+    mountpoint before the real drive is mounted) would be mistaken for the USB
+    drive and recording would silently land on the SD card instead.
+    """
     label = config.usb_label
     for root in config.mount_roots:
         direct = os.path.join(root, label)
-        if os.path.isdir(direct):
+        if os.path.ismount(direct):
             return direct
         try:
             for entry in os.listdir(root):
                 candidate = os.path.join(root, entry, label)
-                if os.path.isdir(candidate):
+                if os.path.ismount(candidate):
                     return candidate
         except OSError:
             continue
