@@ -9,3 +9,13 @@ ExecStart=/opt/stereorec/venv/bin/python /opt/stereorec/tools/check_for_update.p
 Environment=STEREOREC_CONFIG=/opt/stereorec/config.json
 StandardOutput=journal
 StandardError=journal
+# check_for_update.py's own subprocess timeouts (git pull 60s + pip install
+# 180s + py_compile 60s, plus the systemctl stop/start calls) can sum to well
+# over systemd's default oneshot TimeoutStartSec (~90s). Without a longer
+# limit here, systemd can kill this unit AFTER it stops stereorec but BEFORE
+# it restarts it -- leaving the recorder stopped indefinitely, since
+# Restart=always on stereorec.service only covers *it* dying on its own, not
+# another unit stopping it and never starting it back up. (check_for_update.py
+# also has its own SIGTERM safety net for this exact scenario -- see
+# _handle_termination -- but fixing the timeout here is the primary defense.)
+TimeoutStartSec=600

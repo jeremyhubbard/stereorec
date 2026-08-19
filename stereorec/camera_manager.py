@@ -62,7 +62,14 @@ class CameraManager:
         if not PICAMERA2_AVAILABLE:
             logger.warning("Picamera2 not available -- camera subsystem degraded")
             return False
+        open_start = time.monotonic()
         try:
+            # Each of these breadcrumbs sits right before a call that can block
+            # indefinitely instead of raising (observed after an abrupt stall
+            # recovery: libcamera/picamera2 not yet done releasing the device).
+            # A hang there starves the systemd watchdog silently -- the last
+            # breadcrumb logged is then the only clue which call was stuck.
+            logger.info("Querying camera info (global_camera_info)...")
             camera_info = Picamera2.global_camera_info()
             logger.info("Detected cameras: %s", camera_info)
             if len(camera_info) != self.config.expected_camera_count:
@@ -82,6 +89,7 @@ class CameraManager:
                 except OSError as exc:
                     logger.warning("Could not load tuning file %s: %s", self.config.tuning_file, exc)
 
+            logger.info("Constructing Picamera2 instance...")
             self.picam2 = Picamera2(camera_num=self.config.camera_num, tuning=tuning)
 
             for i, mode in enumerate(self.picam2.sensor_modes):
@@ -97,6 +105,7 @@ class CameraManager:
                 size = (self.config.frame_width, self.config.frame_height)
                 video_config = self.picam2.create_video_configuration(main={"size": size})
 
+            logger.info("Configuring camera...")
             self.picam2.configure(video_config)
             self.frame_size = video_config["main"]["size"]
             logger.info("Configured capture size: %s (recorded as-is, raw)", self.frame_size)
@@ -105,6 +114,7 @@ class CameraManager:
             self._last_frame_time = time.monotonic()
             self._frame_count = 0
             self._stopping.clear()
+            logger.info("Starting camera capture...")
             self.picam2.start()
 
             self._health_stop.clear()
@@ -112,9 +122,10 @@ class CameraManager:
                 target=self._health_loop, name="frame-health", daemon=True
             )
             self._health_thread.start()
+            logger.info("Camera opened in %.2fs", time.monotonic() - open_start)
             return True
         except Exception:
-            logger.exception("Camera open failed")
+            logger.exception("Camera open failed after %.2fs", time.monotonic() - open_start)
             self.picam2 = None
             return False
 

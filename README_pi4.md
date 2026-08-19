@@ -173,7 +173,7 @@ conditions. On any fault:
 | Camera stall | frame-health monitor: no frame for `frame_stall_threshold_s` | `CAMERA_STALL`, restart camera pipeline, resume into a new video file |
 | Encoder/recorder fault | recorder loop exception / empty output | `CAMERA_ERROR`, tear down + retry (bounded, then `ERROR` but keeps self-healing) |
 | Process crash / power loss | systemd `Restart=always`; boot reconciliation | start a new session; every already-finalized file stays playable, at most the last one is truncated at the crash point |
-| Process hang | systemd `WatchdogSec` (sd_notify pings stop) | systemd restarts the process |
+| Process hang | systemd `WatchdogSec` (sd_notify pings stop) | systemd restarts the process; `stereorec-failure-report@.service` also fires (see [Diagnosing watchdog/crash restarts](#diagnosing-watchdogcrash-restarts)) |
 | Low disk space | `shutil.disk_usage` gate vs `min_free_mb` | refuse to start / stop recording (keeping every recorded file), notify `LOW_SPACE`, return to `IDLE` |
 | Thermal danger zone | CPU temp ≥ `temp_danger_c` (see [Thermal protection](#thermal-protection)) | safely finalize the current file, `RECOVERING`, auto-resume into a new file once cooled below `temp_danger_c - temp_recovery_hysteresis_c` |
 
@@ -201,12 +201,14 @@ RasPiCam/
 ├── tools/
 │   ├── correct_aspect.py       # offline anamorphic aspect-ratio correction
 │   ├── check_for_update.py     # git fetch/pull + restart, see Auto-updating over Ethernet
-│   └── update_button_watcher.py  # optional GPIO button -> on-demand update check
+│   ├── update_button_watcher.py  # optional GPIO button -> on-demand update check
+│   └── log_failure_report.py   # OnFailure= diagnostics bundle, see Diagnosing watchdog/crash restarts
 ├── systemd/
 │   ├── stereorec.service
 │   ├── stereorec-update.service   # one-shot: runs check_for_update.py
 │   ├── stereorec-update.timer     # triggers the above every few minutes
-│   └── stereorec-update-button.service  # optional: runs update_button_watcher.py
+│   ├── stereorec-update-button.service  # optional: runs update_button_watcher.py
+│   └── stereorec-failure-report@.service  # OnFailure= companion: runs log_failure_report.py
 ├── .gitignore
 ├── config.example.json
 ├── requirements.txt
@@ -375,7 +377,10 @@ sudo /opt/stereorec/venv/bin/pip install -r requirements.txt
 #    backend and for camera/GPIO access); its RuntimeDirectory=stereorec line creates
 #    /run/stereorec (tmpfs) automatically for the RAM fallback_log_dir default -- no
 #    manual log-directory setup needed.
-sudo cp systemd/stereorec.service /etc/systemd/system/
+#    Also install the OnFailure= diagnostics companion (no `enable` needed -- systemd
+#    only instantiates it on demand when stereorec.service fails; see
+#    Diagnosing watchdog/crash restarts below):
+sudo cp systemd/stereorec.service systemd/stereorec-failure-report@.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now stereorec
 journalctl -u stereorec -f
@@ -554,6 +559,18 @@ offline since the check just times out fast):
      LED, and restart on the known-good code anyway (auto-rollback, not a stuck/stopped
      device) — the bad commit is left for you to fix in the repo.
 
+Each step above (stop, pull, pip install, py_compile, restart) is logged individually with its
+own elapsed time, so a stuck run shows exactly which step it was in.
+
+> **If the updater itself gets killed mid-run** (observed cause: `git pull` + `pip install` +
+> `py_compile`'s own timeouts can sum to well over systemd's default oneshot timeout —
+> `stereorec-update.service` sets `TimeoutStartSec=600` to fix that directly), a SIGTERM
+> handler still force-restarts `stereorec` and flushes whatever log was captured before exiting
+> — so a kill after `stop` but before this script's own `start` no longer leaves the recorder
+> stopped until a manual reboot. Look for a `CRITICAL` log line naming the phase it died in
+> (`stopping service`, `git pull`, `pip install`, `py_compile`, `restarting service`) if this
+> ever fires.
+
 The updater's own logs never touch the SD card either: it writes to
 `<fallback_log_dir>/stereorec-update.log` (RAM/tmpfs) and copies that file onto
 `<mount>/STEREOREC/update_logs/stereorec-update.log` at the end of every run if the USB
@@ -581,6 +598,38 @@ git -C /opt/stereorec log -1 --oneline         # commit currently deployed
 ```bash
 sudo systemctl disable --now stereorec-update.timer
 sudo systemctl disable --now stereorec-update-button.service   # if the button was enabled
+```
+
+### Diagnosing watchdog/crash restarts
+`stereorec.service` restarts on its own (`Restart=always`) after any non-clean stop, so a
+watchdog timeout, an OOM kill, or an uncaught fatal exception never leaves the recorder down
+-- but by the time you notice the gap in session folders, the process that could explain *why*
+is already gone. `OnFailure=stereorec-failure-report@%n.service` (in `stereorec.service`, added
+alongside `Restart=always`) closes that gap: it fires on any stop where `Result != success` --
+**not** on a normal `systemctl stop`/SIGTERM shutdown, which exits 0 and isn't a "failure" --
+and runs `tools/log_failure_report.py` to snapshot the evidence before it ages out of the
+journal/kernel ring buffer:
+
+* `systemctl show` for the failed unit -- `Result` is the authoritative answer (`watchdog`,
+  `oom-kill`, `signal`, `exit-code`, ...), plus restart count and timestamps.
+* The last 200 `journalctl -u stereorec` lines -- both systemd's own lifecycle messages
+  (e.g. `Watchdog timeout (limit 30s)!`) and the app's own log lines that made it to the
+  journal (`StandardOutput=journal`), including the `camera_manager.py` breadcrumbs logged
+  right before each call that's known to be able to hang instead of raising (querying camera
+  info, constructing `Picamera2`, `configure()`, `start()`) -- the last one logged pinpoints
+  where a hang actually happened.
+* A `dmesg -T` tail, CPU temp/throttled flags, and `free -h` -- the same signals
+  `_diagnostics_snapshot()` logs on a stall/fault, for the same reason: narrowing down
+  thermal/under-voltage/OOM vs. a genuine driver-level hang.
+
+Like the updater, it never touches the SD card: it writes to
+`<fallback_log_dir>/stereorec-failure_<unit>_<timestamp>.log` (RAM/tmpfs) and copies that file
+onto `<mount>/STEREOREC/failure_reports/` if the USB drive is mounted at the time.
+
+**Checking status:**
+```bash
+journalctl -u 'stereorec-failure-report@*' -e   # the report itself (also on the journal)
+ls /run/stereorec/stereorec-failure_*.log       # or <USB>/STEREOREC/failure_reports/
 ```
 
 ### Camera setup (Arducam Camarray / stereo HAT)
@@ -996,6 +1045,11 @@ python3 -m py_compile stereorec/*.py tools/*.py
   sudo systemctl kill -s SIGSTOP stereorec      # freeze the process
   # Within WatchdogSec (30s) systemd should kill + restart it.
   journalctl -u stereorec -e
+  ```
+  Also confirm `stereorec-failure-report@stereorec.service` fired and its report shows
+  `Result=watchdog` -- see [Diagnosing watchdog/crash restarts](#diagnosing-watchdogcrash-restarts):
+  ```bash
+  journalctl -u 'stereorec-failure-report@*' -e
   ```
 
 ### 4. Low disk space

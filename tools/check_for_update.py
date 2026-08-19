@@ -29,8 +29,11 @@ import logging
 import logging.handlers
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import time
+from typing import Optional
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_DIR)
@@ -46,6 +49,47 @@ LOG_FILENAME = "stereorec-update.log"
 UPDATE_LOG_SUBDIR = "update_logs"
 SERVICE_NAME = "stereorec"
 FETCH_TIMEOUT_S = 15
+
+
+class _RunState:
+    """Tracks which phase this run is in and whether stereorec is currently
+    stopped, so _handle_termination (see below) can log exactly where things
+    stood and, more importantly, still bring stereorec back up.
+    """
+
+    def __init__(self, config: Config):
+        self.config = config
+        self.phase = "starting"
+        self.service_stopped = False
+
+
+_state: Optional[_RunState] = None
+
+
+def _handle_termination(signum, frame) -> None:
+    """Last-resort safety net for this oneshot getting killed mid-run.
+
+    Observed cause: this script's own subprocess timeouts (git pull 60s + pip
+    install 180s + py_compile 60s, on top of the systemctl stop/start calls)
+    can sum to well over systemd's default oneshot TimeoutStartSec (~90s) --
+    see stereorec-update.service's own TimeoutStartSec for the primary fix.
+    This handler is the backstop for that timeout firing anyway (or any other
+    kill): without it, a kill received after `systemctl stop stereorec` but
+    before this script's own `systemctl start stereorec` leaves the recorder
+    stopped indefinitely -- Restart=always on stereorec.service only covers
+    *it* dying on its own, not "another unit stopped it and never started it
+    back up." A reboot was the only way out of that before this existed.
+    """
+    logger.critical(
+        "Received signal %s during phase %r -- restarting stereorec before exiting",
+        signum,
+        _state.phase if _state else "unknown",
+    )
+    if _state is not None:
+        if _state.service_stopped:
+            systemctl("start")
+        flush_log_to_usb(_state.config)
+    sys.exit(1)
 
 
 def setup_logging(config: Config) -> None:
@@ -205,9 +249,14 @@ def systemctl(action: str) -> bool:
 
 
 def main() -> int:
+    global _state
     config = Config.load()
     setup_logging(config)
+    _state = _RunState(config)
+    signal.signal(signal.SIGTERM, _handle_termination)
+    signal.signal(signal.SIGINT, _handle_termination)
 
+    _state.phase = "fetch"
     if not git_fetch():
         logger.debug("Offline or fetch failed -- nothing to do")
         flush_log_to_usb(config)
@@ -232,27 +281,46 @@ def main() -> int:
     if led.open():
         led.set_updating()
 
+    _state.phase = "stopping service"
+    stop_start = time.monotonic()
     if not systemctl("stop"):
         logger.error("Failed to stop %s.service -- aborting update", SERVICE_NAME)
         led.close()
         flush_log_to_usb(config)
         return 1
+    _state.service_stopped = True
+    logger.info("Service stopped in %.1fs", time.monotonic() - stop_start)
 
+    _state.phase = "git pull"
+    step_start = time.monotonic()
     ok = git_pull_ff_only()
+    logger.info("git pull --ff-only finished in %.1fs (ok=%s)", time.monotonic() - step_start, ok)
+
     if ok:
+        _state.phase = "pip install"
+        step_start = time.monotonic()
         ok = pip_install_requirements()
+        logger.info("pip install finished in %.1fs (ok=%s)", time.monotonic() - step_start, ok)
     if ok:
+        _state.phase = "py_compile"
+        step_start = time.monotonic()
         ok = py_compile_check()
+        logger.info("py_compile finished in %.1fs (ok=%s)", time.monotonic() - step_start, ok)
 
     if ok:
         logger.info("Update applied successfully: now at %s", remote[:8])
         check_new_config_keys()
     else:
         logger.error("Update failed sanity checks -- rolling back to %s", previous_commit[:8])
+        _state.phase = "rolling back"
         git_reset_hard(previous_commit)
 
+    _state.phase = "restarting service"
     led.close()
+    restart_start = time.monotonic()
     systemctl("start")
+    _state.service_stopped = False
+    logger.info("Service restart requested after %.1fs", time.monotonic() - restart_start)
 
     flush_log_to_usb(config)
     return 0 if ok else 1
