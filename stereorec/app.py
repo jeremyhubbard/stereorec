@@ -27,7 +27,7 @@ from stereorec.state_manager import StateManager, read_previous
 from stereorec.states import State, transition_allowed
 from stereorec.thermal_manager import ZONE_DANGER, ZONE_NORMAL, ThermalManager
 from stereorec.usb_manager import UsbManager
-from stereorec.util import ensure_dir, free_space_mb
+from stereorec.util import ensure_dir, free_space_mb, read_cpu_temp_c, read_throttled_flags
 
 logger = logging.getLogger(__name__)
 
@@ -131,12 +131,30 @@ class RecorderApp:
         if thermal_danger:
             logger.warning("Thermal danger zone reached -- safely stopping recording")
         elif stall:
-            logger.warning("Camera stall detected -- recovering")
+            logger.warning("Camera stall detected -- recovering (%s)", self._diagnostics_snapshot())
         elif fault:
-            logger.warning("Recording fault (%s) -- recovering", fault_reason)
+            logger.warning(
+                "Recording fault (%s) -- recovering (%s)", fault_reason, self._diagnostics_snapshot()
+            )
 
         self._ensure_stopped()
         self._set_state(State.RECOVERING)
+
+    def _diagnostics_snapshot(self) -> str:
+        """Best-effort system snapshot to log alongside stall/fault events.
+
+        Cheap, non-fatal reads only -- this runs on the hot fault path, and
+        the whole point is narrowing down *why* a stall happened (storage
+        hiccup vs. under-voltage vs. thermal) from the next log we get.
+        """
+        temp = read_cpu_temp_c()
+        throttled = read_throttled_flags()
+        free_mb = free_space_mb(self.session_dir) if self.session_dir else None
+        return "cpu_temp={} throttled={} free_mb={}".format(
+            f"{temp:.1f}C" if temp is not None else "unknown",
+            throttled if throttled else "unknown",
+            f"{free_mb:.0f}" if free_mb is not None else "unknown",
+        )
 
     def _drive_state(self) -> None:
         usb_present = self.usb_manager.is_present

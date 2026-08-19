@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 from typing import Any, Optional
 
@@ -60,3 +61,25 @@ def read_cpu_temp_c() -> Optional[float]:
         return millidegrees / 1000.0
     except (OSError, ValueError):
         return None
+
+
+def read_throttled_flags() -> Optional[str]:
+    """Best-effort read of the RPi under-voltage/throttling bitmask via ``vcgencmd``.
+
+    Returns the raw ``throttled=0x...`` string (any nonzero bit means an
+    under-voltage, frequency-capping, or throttling event has occurred either
+    now or since boot -- see the "Bit" table in vcgencmd's docs), or None if
+    vcgencmd isn't available (e.g. off-Pi, or not on PATH).
+    """
+    try:
+        result = subprocess.run(
+            ["vcgencmd", "get_throttled"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
