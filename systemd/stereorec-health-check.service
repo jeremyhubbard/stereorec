@@ -1,0 +1,9 @@
+[Unit]
+Description=StereoRec service-health check (one-shot)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/stereorec/venv/bin/python /opt/stereorec/tools/check_service_health.py
+Environment=STEREOREC_CONFIG=/opt/stereorec/config.json
+StandardOutput=journal
+StandardError=journal

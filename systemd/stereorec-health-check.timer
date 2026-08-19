@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically confirm stereorec.service is actually running
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+Persistent=false
+
+[Install]
+WantedBy=timers.target
