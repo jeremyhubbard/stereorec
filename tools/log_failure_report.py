@@ -67,13 +67,44 @@ def _run(cmd, timeout: float) -> str:
     return output or "<no output>"
 
 
+def _parse_systemctl_show(output: str) -> dict:
+    props = {}
+    for line in output.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            props[key] = value
+    return props
+
+
 def build_report(unit: str, config: Config) -> str:
+    show_output = _run(["systemctl", "show", unit, "-p", SYSTEMCTL_SHOW_PROPS], timeout=10)
+    props = _parse_systemctl_show(show_output)
+
     lines = [
         f"=== StereoRec failure report: {unit} ===",
         f"Generated: {datetime.datetime.now().isoformat()}",
         "",
+    ]
+
+    if props.get("Result") == "start-limit-hit":
+        # The one Result value that means Restart=always has stopped mattering:
+        # systemd hit StartLimitBurst (too many failures in too short a window)
+        # and gave up on this unit entirely -- it will NOT come back on its own,
+        # unlike every other failure mode this report covers. Called out here,
+        # loudly, since it's otherwise just one line buried in the raw show
+        # output below and easy to miss when skimming.
+        lines += [
+            "*** Result=start-limit-hit -- systemd gave up restarting this unit after too many",
+            "*** failures in a short window (StartLimitIntervalSec/StartLimitBurst).",
+            "*** Restart=always does NOT apply here. The unit stays stopped until someone runs",
+            "***   systemctl reset-failed " + unit + " && systemctl start " + unit,
+            "*** (or reboots). This is the 'LEDs dark and staying dark' field symptom.",
+            "",
+        ]
+
+    lines += [
         "--- systemctl show (Result is the authoritative 'why') ---",
-        _run(["systemctl", "show", unit, "-p", SYSTEMCTL_SHOW_PROPS], timeout=10),
+        show_output,
         "",
         f"--- journalctl -u {unit} (last {JOURNAL_LINES} lines) ---",
         _run(["journalctl", "-u", unit, "-n", str(JOURNAL_LINES), "--no-pager"], timeout=15),

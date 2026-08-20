@@ -37,6 +37,7 @@ class LedManager:
 
     def open(self) -> bool:
         if not self.config.led_enabled:
+            logger.info("LED strip disabled via config (led_enabled=false)")
             return False
         if not NEOPIXEL_AVAILABLE:
             logger.warning("NeoPixel libraries not available -- LED status disabled")

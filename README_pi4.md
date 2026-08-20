@@ -202,13 +202,16 @@ RasPiCam/
 │   ├── correct_aspect.py       # offline anamorphic aspect-ratio correction
 │   ├── check_for_update.py     # git fetch/pull + restart, see Auto-updating over Ethernet
 │   ├── update_button_watcher.py  # optional GPIO button -> on-demand update check
-│   └── log_failure_report.py   # OnFailure= diagnostics bundle, see Diagnosing watchdog/crash restarts
+│   ├── log_failure_report.py   # OnFailure= diagnostics bundle, see Diagnosing watchdog/crash restarts
+│   └── check_service_health.py # periodic "is stereorec still running" check, see same section
 ├── systemd/
 │   ├── stereorec.service
 │   ├── stereorec-update.service   # one-shot: runs check_for_update.py
 │   ├── stereorec-update.timer     # triggers the above every few minutes
 │   ├── stereorec-update-button.service  # optional: runs update_button_watcher.py
-│   └── stereorec-failure-report@.service  # OnFailure= companion: runs log_failure_report.py
+│   ├── stereorec-failure-report@.service  # OnFailure= companion: runs log_failure_report.py
+│   ├── stereorec-health-check.service     # one-shot: runs check_service_health.py
+│   └── stereorec-health-check.timer       # triggers the above every few minutes
 ├── .gitignore
 ├── config.example.json
 ├── requirements.txt
@@ -384,6 +387,13 @@ sudo cp systemd/stereorec.service systemd/stereorec-failure-report@.service /etc
 sudo systemctl daemon-reload
 sudo systemctl enable --now stereorec
 journalctl -u stereorec -f
+
+#    Also enable the periodic "is it actually running" health check -- unlike the update
+#    timer below, this is useful on every deployment, not just dev devices (see
+#    Diagnosing watchdog/crash restarts):
+sudo cp systemd/stereorec-health-check.service systemd/stereorec-health-check.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now stereorec-health-check.timer
 
 # 6) Set up the power button (recommended for an unattended/enclosed deployment) --
 #    see "GPIO shutdown button" under Safe shutdown & power-down below.
@@ -626,10 +636,34 @@ Like the updater, it never touches the SD card: it writes to
 `<fallback_log_dir>/stereorec-failure_<unit>_<timestamp>.log` (RAM/tmpfs) and copies that file
 onto `<mount>/STEREOREC/failure_reports/` if the USB drive is mounted at the time.
 
+If the report's `Result` is `start-limit-hit`, the report leads with a loud banner calling that
+out specifically: it's the one `Result` where `Restart=always` has stopped mattering. systemd
+hit `StartLimitBurst` (too many failures in too short a window — no override is set, so
+systemd's defaults apply) and gave up on the unit entirely; it will sit stopped, LEDs dark,
+until someone runs `systemctl reset-failed stereorec && systemctl start stereorec` (or reboots)
+— unlike every other cause here, which self-heals.
+
 **Checking status:**
 ```bash
 journalctl -u 'stereorec-failure-report@*' -e   # the report itself (also on the journal)
 ls /run/stereorec/stereorec-failure_*.log       # or <USB>/STEREOREC/failure_reports/
+```
+
+**The gap `OnFailure=` doesn't cover:** it fires once, when the failure happens. If nobody's
+watching the journal right then — or the failure is a `start-limit-hit` that nothing auto-heals
+— the recorder can sit down for a long time with only that one report to show for it.
+`systemd/stereorec-health-check.timer` runs `tools/check_service_health.py` every 5 minutes
+(`OnBootSec=3min`) to make that loud and repeating instead of a single easy-to-miss event: it
+checks `systemctl show stereorec -p ActiveState,SubState,Result,InactiveEnterTimestamp,NRestarts`
+and logs a `WARNING` (or `CRITICAL`, with the recovery command spelled out, for
+`start-limit-hit` specifically) every single run stereorec isn't `active` — purely detection,
+it never restarts anything itself. Like the others, it logs even on the healthy path (`INFO`,
+not `DEBUG`) so an empty `stereorec-health.log` unambiguously means the checker itself never
+ran, not "everything's fine" — the same ambiguity the updater's own no-op logging had.
+
+```bash
+journalctl -u stereorec-health-check -e            # last check's result
+cat /run/stereorec/stereorec-health.log             # or <USB>/STEREOREC/health_logs/
 ```
 
 ### Camera setup (Arducam Camarray / stereo HAT)

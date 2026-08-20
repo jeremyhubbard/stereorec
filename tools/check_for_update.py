@@ -258,7 +258,12 @@ def main() -> int:
 
     _state.phase = "fetch"
     if not git_fetch():
-        logger.debug("Offline or fetch failed -- nothing to do")
+        # INFO, not DEBUG: this and the "already up to date" branch below are
+        # the *only* two outcomes on an otherwise uneventful run, and the log
+        # file only captures INFO+ by default -- without a line here, an
+        # empty stereorec-update.log is ambiguous between "timer never ran"
+        # and "ran every 5 minutes and had nothing to do every time."
+        logger.info("Offline or fetch failed -- nothing to do")
         flush_log_to_usb(config)
         return 0
 
@@ -270,7 +275,7 @@ def main() -> int:
         return 1
 
     if local == remote:
-        logger.debug("Already up to date (%s)", local[:8])
+        logger.info("Already up to date (%s)", local[:8])
         flush_log_to_usb(config)
         return 0
 
