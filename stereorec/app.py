@@ -137,6 +137,12 @@ class RecorderApp:
         if thermal_danger:
             logger.warning("Thermal danger zone reached -- safely stopping recording")
         elif stall:
+            # Silence the frame-health thread *before* the slow dmesg capture below --
+            # otherwise it can fire one more stray warning against the dying camera
+            # while dmesg is still running, which gets processed on the next tick
+            # against the newly-reopened camera and kills a fresh recording for a
+            # fault that belonged to the previous one.
+            self.camera_manager.prepare_to_stop()
             logger.warning("Camera stall detected -- recovering (%s)", self._diagnostics_snapshot())
             self._log_kernel_log_tail()
         elif fault:
