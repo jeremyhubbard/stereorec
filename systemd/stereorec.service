@@ -17,6 +17,12 @@ Type=notify
 ExecStart=/opt/stereorec/venv/bin/python -m stereorec
 WorkingDirectory=/opt/stereorec
 Environment=STEREOREC_CONFIG=/opt/stereorec/config.json
+# Diagnostic only -- verbose libcamera/ISP pipeline-handler logging to track down
+# camera stalls that leave no trace in dmesg. Goes to the journal (`journalctl -u
+# stereorec`), NOT stereorec.log. Very high-volume at DEBUG -- remove this line
+# (and `systemctl daemon-reload && systemctl restart stereorec`) once done, or a
+# long recording session will bloat the journal.
+Environment=LIBCAMERA_LOG_LEVELS=*:DEBUG
 Restart=always
 RestartSec=2
 WatchdogSec=30
