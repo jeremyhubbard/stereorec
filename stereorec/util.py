@@ -110,3 +110,46 @@ def read_recent_kernel_log(max_lines: int = 20) -> Optional[str]:
     if not lines:
         return None
     return "\n".join(lines[-max_lines:])
+
+
+REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def read_git_version(repo_dir: str = REPO_DIR) -> str:
+    """Best-effort ``<short hash>[+dirty]`` for the code actually running.
+
+    /opt/stereorec is a git working tree specifically so it can be updated in
+    place (see README_pi4.md's "Auto-updating over Ethernet") -- which means
+    the running process's actual version is easy to lose track of across
+    auto-update restarts. Meant to be logged once at startup. Returns
+    "unknown" rather than raising if git isn't available or this isn't a git
+    checkout (e.g. this dev machine).
+    """
+    try:
+        hash_result = subprocess.run(
+            ["git", "-C", repo_dir, "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    if hash_result.returncode != 0:
+        return "unknown"
+    version = hash_result.stdout.strip()
+    if not version:
+        return "unknown"
+
+    try:
+        status_result = subprocess.run(
+            ["git", "-C", repo_dir, "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if status_result.returncode == 0 and status_result.stdout.strip():
+            version += "+dirty"
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    return version

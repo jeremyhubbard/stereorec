@@ -31,6 +31,7 @@ from stereorec.util import (
     ensure_dir,
     free_space_mb,
     read_cpu_temp_c,
+    read_git_version,
     read_recent_kernel_log,
     read_throttled_flags,
 )
@@ -76,6 +77,7 @@ class RecorderApp:
     def run(self) -> int:
         self.session_id = datetime.datetime.now().strftime(self.config.session_dirname_format)
         logger.info("StereoRec starting, session_id=%s", self.session_id)
+        logger.info("Running version %s", read_git_version())
 
         self.led_manager.open()
         self._set_state(State.BOOTING)
