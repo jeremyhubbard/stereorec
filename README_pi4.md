@@ -1159,8 +1159,14 @@ whatever accumulated in RAM before the drive was available (typically just the b
 is preserved rather than lost to the next power cycle.
 
 journald (`StandardError=journal`) is a separate potential SD writer if persistent journaling
-is enabled system-wide; optionally set `Storage=volatile` in `/etc/systemd/journald.conf` to
-keep that off the SD card too.
+is enabled system-wide. `systemd/journald-volatile.conf` keeps it RAM-only instead:
+```bash
+sudo cp systemd/journald-volatile.conf /etc/systemd/journald.conf.d/journald-volatile.conf
+sudo systemctl restart systemd-journald
+```
+Confirm with `ls -ld /var/log/journal` (should not exist) or `journalctl --disk-usage`. Like
+the RAM fallback log, this is volatile -- journal contents are cleared on every reboot/power
+loss, which is exactly the tradeoff being made to keep it off the SD card.
 
 **Resulting behavior:** once the `STEREOREC` USB mounts, no log writes hit the SD card at all.
 The SD is touched only during the boot window before the USB mounts (and while it's absent),

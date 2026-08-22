@@ -112,6 +112,37 @@ def read_recent_kernel_log(max_lines: int = 20) -> Optional[str]:
     return "\n".join(lines[-max_lines:])
 
 
+def read_recent_journal(seconds: int = 10, unit: str = "stereorec") -> Optional[str]:
+    """Best-effort tail of the last ``seconds`` of the systemd journal for ``unit``.
+
+    Meant to be called right at stall/fault detection. This is the only place
+    that ever sees libcamera's own stderr output when LIBCAMERA_LOG_LEVELS is
+    set for a debugging session (see README_pi4.md's camera-stall
+    troubleshooting) -- that output reaches the journal, never stereorec.log.
+    Expect some overlap with this app's own just-emitted log lines, since
+    StandardOutput=journal mirrors them there too. Returns None off-Pi,
+    without permission, or if journalctl isn't on PATH.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "journalctl",
+                "-u", unit,
+                "--no-pager",
+                "-o", "short-precise",
+                "--since", f"-{seconds}s",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
