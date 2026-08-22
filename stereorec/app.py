@@ -149,14 +149,12 @@ class RecorderApp:
             self.camera_manager.prepare_to_stop()
             logger.warning("Camera stall detected -- recovering (%s)", self._diagnostics_snapshot())
             self._log_kernel_log_tail()
-            self._log_recent_journal()
             self._schedule_followup_journal_capture()
         elif fault:
             logger.warning(
                 "Recording fault (%s) -- recovering (%s)", fault_reason, self._diagnostics_snapshot()
             )
             self._log_kernel_log_tail()
-            self._log_recent_journal()
             self._schedule_followup_journal_capture()
 
         self._ensure_stopped()
@@ -174,31 +172,18 @@ class RecorderApp:
         if tail:
             logger.warning("Recent kernel log (dmesg -T, newest last):\n%s", tail)
 
-    def _log_recent_journal(self) -> None:
-        """Best-effort journal tail, logged alongside a stall/fault.
-
-        The one place that ever surfaces libcamera's own stderr output during
-        a LIBCAMERA_LOG_LEVELS debugging session -- that never reaches
-        stereorec.log otherwise. Some overlap with lines this app just logged
-        is expected, since StandardOutput=journal mirrors them there too.
-
-        This only ever looks *backward* from whenever it happens to run --
-        see _schedule_followup_journal_capture() for the other side.
-        """
-        tail = read_recent_journal(seconds=JOURNAL_TAIL_SECONDS)
-        if tail:
-            logger.warning(
-                "Recent journal, last %ds (unit=stereorec):\n%s", JOURNAL_TAIL_SECONDS, tail
-            )
-
     def _schedule_followup_journal_capture(self) -> None:
-        """Capture a second journal window a few seconds after a stall/fault.
+        """Capture the journal a few seconds after a stall/fault.
 
-        _log_recent_journal() runs inline in the fault-handling path and can
-        only look backward from that moment -- it never sees anything logged
-        during the teardown/reopen sequence that follows. Waiting here would
-        delay recovery (the opposite of what prepare_to_stop() above is for),
-        so this runs on its own daemon thread instead, off the main tick loop.
+        Reading the journal immediately, inline in the fault-handling path,
+        turned out to reliably come back empty: at DEBUG-level libcamera
+        logging volumes, journald's rate limiter has usually suppressed
+        everything from the moment that actually matters by the time this
+        runs. Waiting a few seconds lets that backlog surface (with a
+        "Suppressed N messages" marker) instead of racing it. Waiting inline
+        here would delay recovery (the opposite of what prepare_to_stop()
+        above is for), so this runs on its own daemon thread instead, off the
+        main tick loop.
         """
 
         def _capture() -> None:

@@ -23,6 +23,13 @@ from stereorec.config import Config
 
 logger = logging.getLogger(__name__)
 
+# Above this, picam2.close() is logged at WARNING instead of DEBUG -- a slow
+# close is the dominant cost in stall recovery (observed ~9s of an ~11s total
+# recovery), but that's invisible at DEBUG whenever libcamera's own DEBUG
+# logging is also enabled, since that's the exact condition flooding the
+# journal around a stall.
+SLOW_CLOSE_WARN_S = 1.0
+
 try:
     from picamera2 import Picamera2
 
@@ -155,5 +162,9 @@ class CameraManager:
                 self.picam2.close()
             except Exception:
                 logger.exception("Error closing camera")
-            logger.debug("picam2.close() took %.2fs", time.monotonic() - close_start)
+            close_elapsed = time.monotonic() - close_start
+            if close_elapsed > SLOW_CLOSE_WARN_S:
+                logger.warning("picam2.close() took %.2fs (slow)", close_elapsed)
+            else:
+                logger.debug("picam2.close() took %.2fs", close_elapsed)
             self.picam2 = None
